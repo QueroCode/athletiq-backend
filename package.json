@@ -1,0 +1,13 @@
+{
+  "name": "athletiq-vercel-webhooks",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "echo 'edge runtime, no build'",
+    "start": "vercel dev"
+  }
+}
+
+
