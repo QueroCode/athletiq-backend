@@ -1,0 +1,13 @@
+{
+    "compilerOptions": {
+        "baseUrl": ".",
+        "paths": { "@/*": ["*"] },
+        "module": "ESNext",
+        "moduleResolution": "Bundler",
+        "target": "ES2022",
+        "isolatedModules": true,
+        "esModuleInterop": true,
+        "lib": ["ES2023", "DOM"]
+    }
+}
+  
