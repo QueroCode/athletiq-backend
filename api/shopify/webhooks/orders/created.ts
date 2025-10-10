@@ -59,7 +59,7 @@ export async function updateOrderNote(
   const input = { id: orderId, note } as const;
 
   try {
-    const response = await fetch(adminGraphQL, {
+    const response = await fetchWithTimeout(adminGraphQL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -102,7 +102,7 @@ export async function getCurrentPoints(
   `;
 
   try {
-    const response = await fetch(adminGraphQL, {
+    const response = await fetchWithTimeout(adminGraphQL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -193,7 +193,7 @@ export async function updateCustomerPoints(
   } as const;
 
   try {
-    const response = await fetch(adminGraphQL, {
+    const response = await fetchWithTimeout(adminGraphQL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -232,7 +232,7 @@ export async function getCurrentClubLevel(
     }
   `;
   try {
-    const response = await fetch(adminGraphQL, {
+    const response = await fetchWithTimeout(adminGraphQL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -265,7 +265,7 @@ export async function getCustomerTotalSpent(
     }
   `;
   try {
-    const response = await fetch(adminGraphQL, {
+    const response = await fetchWithTimeout(adminGraphQL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -325,7 +325,7 @@ export async function updateCustomerClubLevel(
   } as const;
 
   try {
-    const response = await fetch(adminGraphQL, {
+    const response = await fetchWithTimeout(adminGraphQL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -353,34 +353,34 @@ export async function updateCustomerClubLevel(
 
 export const config = { runtime: "edge" } as const;
 
+// Small helper to bound external calls so we don't exceed webhook time limits
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 4500): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Read raw request body in both Edge (Request) and Node bridges
 async function readRawBody(req: any): Promise<string> {
   console.log("[readRawBody] start");
+  // Edge/Fetch Request provides .text() with the exact raw payload
   if (req && typeof req.text === "function") {
     console.log("[readRawBody] using req.text()");
     return await req.text();
   }
-  if (req && req.body) {
-    // Web ReadableStream
-    if (typeof ReadableStream !== "undefined" && req.body instanceof ReadableStream) {
-      console.log("[readRawBody] using ReadableStream -> Response().text()");
-      return await new Response(req.body).text();
-    }
-    // Already parsed or string
-    if (typeof req.body === "string") {
-      console.log("[readRawBody] using string body");
-      return req.body;
-    }
-    if (typeof req.body === "object") {
-      console.log("[readRawBody] using JSON.stringify(object) body");
-      return JSON.stringify(req.body);
-    }
-  }
-  if (typeof req.arrayBuffer === "function") {
+
+  // If a raw ArrayBuffer reader is available, prefer it to avoid any re-stringify differences
+  if (typeof req?.arrayBuffer === "function") {
     console.log("[readRawBody] using req.arrayBuffer() fallback");
     const ab = await req.arrayBuffer();
     return new TextDecoder().decode(ab);
   }
+
+  // Node.js IncomingMessage: read stream bytes directly
   if (req && typeof req.on === "function") {
     console.log("[readRawBody] using Node stream fallback");
     return await new Promise<string>((resolve, reject) => {
@@ -408,7 +408,100 @@ async function readRawBody(req: any): Promise<string> {
       req.on("error", (err: unknown) => reject(err));
     });
   }
+
+  // Some bridges expose req.body/req.rawBody. Use rawBody if present.
+  // Already parsed or string
+  if (req && (req as any).rawBody) {
+    console.log("[readRawBody] using req.rawBody");
+    const raw = (req as any).rawBody as unknown;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const g: any = globalThis as any;
+    if (g.Buffer && g.Buffer.isBuffer(raw)) return (raw as any).toString("utf8");
+    if (typeof raw === "string") return raw as string;
+  }
+
+  if (req && req.body) {
+    // Web ReadableStream
+    if (typeof ReadableStream !== "undefined" && req.body instanceof ReadableStream) {
+      console.log("[readRawBody] using ReadableStream -> Response().text()");
+      return await new Response(req.body).text();
+    }
+    if (typeof req.body === "string") {
+      console.log("[readRawBody] using string body");
+      return req.body;
+    }
+    if (typeof req.body === "object") {
+      // Avoid re-stringifying parsed objects for HMAC when possible; only as a last resort
+      console.log("[readRawBody] using JSON.stringify(object) body (last resort)");
+      return JSON.stringify(req.body);
+    }
+  }
+
   console.log("[readRawBody] unsupported request body");
+  throw new Error("Unsupported request body");
+}
+
+// Read raw request bytes (preferred for HMAC), with a matching string for JSON parsing
+async function readRawBodyBytes(req: any): Promise<Uint8Array> {
+  console.log("[readRawBodyBytes] start");
+  // Prefer direct ArrayBuffer from the request (Edge/Fetch)
+  if (typeof req?.arrayBuffer === "function") {
+    console.log("[readRawBodyBytes] using req.arrayBuffer()");
+    const ab = await req.arrayBuffer();
+    return new Uint8Array(ab);
+  }
+
+  // Web ReadableStream available
+  if (req && req.body && typeof ReadableStream !== "undefined" && req.body instanceof ReadableStream) {
+    console.log("[readRawBodyBytes] using ReadableStream -> Response().arrayBuffer()");
+    const ab = await new Response(req.body).arrayBuffer();
+    return new Uint8Array(ab);
+  }
+
+  // If only text() is available, read it and encode to bytes
+  if (req && typeof req.text === "function") {
+    console.log("[readRawBodyBytes] using req.text() -> TextEncoder");
+    const s = await req.text();
+    return new TextEncoder().encode(s);
+  }
+
+  // Node IncomingMessage stream
+  if (req && typeof req.on === "function") {
+    console.log("[readRawBodyBytes] using Node stream");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const g: any = globalThis as any;
+    return await new Promise<Uint8Array>((resolve, reject) => {
+      const chunks: any[] = [];
+      req.on("data", (chunk: any) => chunks.push(chunk));
+      req.on("end", () => {
+        try {
+          if (g.Buffer) {
+            const buf = g.Buffer.concat(
+              chunks.map((c: any) => (g.Buffer.isBuffer(c) ? c : g.Buffer.from(c))),
+            );
+            resolve(new Uint8Array(buf));
+          } else {
+            resolve(new TextEncoder().encode(chunks.join("")));
+          }
+        } catch (e) {
+          reject(e);
+        }
+      });
+      req.on("error", (err: unknown) => reject(err));
+    });
+  }
+
+  // rawBody provided by some adapters
+  if (req && (req as any).rawBody) {
+    console.log("[readRawBodyBytes] using req.rawBody");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const g: any = globalThis as any;
+    const raw = (req as any).rawBody as unknown;
+    if (g.Buffer && g.Buffer.isBuffer(raw)) return new Uint8Array(raw as any);
+    if (typeof raw === "string") return new TextEncoder().encode(raw as string);
+  }
+
+  console.log("[readRawBodyBytes] unsupported request body");
   throw new Error("Unsupported request body");
 }
 
@@ -495,8 +588,9 @@ export default async function handler(req: any): Promise<Response> {
   }
 
   // Read raw body for HMAC validation
-  const rawBody = await readRawBody(req as any);
-  console.log("[handler] body read", { length: rawBody?.length ?? 0, preview: (rawBody || "").slice(0, 256) });
+  const rawBytes = await readRawBodyBytes(req as any);
+  const rawBody = new TextDecoder().decode(rawBytes);
+  console.log("[handler] body read", { length: rawBytes?.length ?? 0, preview: rawBody.slice(0, 256) });
   const hmacHeader = getHeader(req, "x-shopify-hmac-sha256");
   if (!hmacHeader) {
     console.log("[handler] missing HMAC header");
@@ -508,28 +602,29 @@ export default async function handler(req: any): Promise<Response> {
 
   try {
     console.log("[handler] HMAC validation start");
-    const encoder = new TextEncoder();
     const key = await crypto.subtle.importKey(
       "raw",
-      encoder.encode(webhookSecret),
+      new TextEncoder().encode(webhookSecret),
       { name: "HMAC", hash: "SHA-256" },
       false,
       ["sign"],
     );
+    // Ensure an ArrayBuffer (not SharedArrayBuffer) for WebCrypto
+    const dataForHmacBuf = new ArrayBuffer(rawBytes.byteLength);
+    new Uint8Array(dataForHmacBuf).set(rawBytes);
     const signature = await crypto.subtle.sign(
       "HMAC",
       key,
-      encoder.encode(rawBody),
+      dataForHmacBuf,
     );
-    const calculatedHmac = btoa(
-      String.fromCharCode(...new Uint8Array(signature)),
-    );
+    const calculatedHmac = toBase64(signature);
+    const mask = (s: string) => (s ? `${s.slice(0, 6)}...${s.slice(-4)}` : "");
     console.log("[handler] HMAC compared", {
       headerLength: hmacHeader.length,
       calculatedLength: calculatedHmac.length,
       match: calculatedHmac === hmacHeader,
-      header: hmacHeader,
-      calculated: calculatedHmac,
+      headerMasked: mask(hmacHeader),
+      calculatedMasked: mask(calculatedHmac),
     });
     if (calculatedHmac !== hmacHeader) {
       return new Response(JSON.stringify({ error: "Invalid HMAC" }), {
