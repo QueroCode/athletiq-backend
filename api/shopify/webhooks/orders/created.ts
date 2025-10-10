@@ -521,7 +521,9 @@ export default async function handler(req: any): Promise<Response> {
       key,
       encoder.encode(rawBody),
     );
-    const calculatedHmac = toBase64(signature);
+    const calculatedHmac = btoa(
+      String.fromCharCode(...new Uint8Array(signature)),
+    );
     console.log("[handler] HMAC compared", {
       headerLength: hmacHeader.length,
       calculatedLength: calculatedHmac.length,
