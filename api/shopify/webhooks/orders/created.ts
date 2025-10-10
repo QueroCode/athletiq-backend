@@ -46,6 +46,7 @@ export async function updateOrderNote(
   orderId: string,
   note: string,
 ): Promise<boolean> {
+  console.log("[updateOrderNote] start", { orderId, noteLength: note?.length ?? 0 });
   const mutation = `
     mutation orderUpdate($input: OrderInput!) {
       orderUpdate(input: $input) {
@@ -68,12 +69,18 @@ export async function updateOrderNote(
     });
 
     const result = (await response.json()) as any;
+    console.log("[updateOrderNote] result", {
+      hasErrors: Boolean(result?.errors),
+      userErrorsCount: result?.data?.orderUpdate?.userErrors?.length ?? 0,
+      hasOrder: Boolean(result?.data?.orderUpdate?.order),
+    });
     return (
       !result?.errors &&
       result?.data?.orderUpdate?.userErrors?.length === 0 &&
       Boolean(result?.data?.orderUpdate?.order)
     );
   } catch {
+    console.log("[updateOrderNote] exception");
     return false;
   }
 }
@@ -83,6 +90,7 @@ export async function getCurrentPoints(
   adminToken: string,
   customerId: string,
 ): Promise<number | null> {
+  console.log("[getCurrentPoints] start", { customerId });
   const query = `
     query getCustomer($id: ID!) {
       customer(id: $id) {
@@ -104,13 +112,22 @@ export async function getCurrentPoints(
     });
     const result = (await response.json()) as any;
     if (result?.errors || !result?.data?.customer) return null;
-    return parseInt(result.data.customer.metafield?.value || "0");
+    const points = parseInt(result.data.customer.metafield?.value || "0");
+    console.log("[getCurrentPoints] value", { points });
+    return points;
   } catch {
+    console.log("[getCurrentPoints] exception");
     return null;
   }
 }
 
 export function calculatePointsToDebit(order: OrderCreatedPayload): number {
+  console.log("[calculatePointsToDebit] start", {
+    orderId: order?.id,
+    discountApplicationsCount: order?.discount_applications?.length ?? 0,
+    noteAttributesCount: order?.note_attributes?.length ?? 0,
+    totalDiscounts: order?.total_discounts,
+  });
   const pointsDiscount = order.discount_applications?.find(
     (discount) =>
       (discount.description || "") === "Pontos de vantagem" ||
@@ -120,14 +137,18 @@ export function calculatePointsToDebit(order: OrderCreatedPayload): number {
 
   if (pointsDiscount) {
     const discountValue = parseFloat(pointsDiscount.value);
-    return Math.round(discountValue / POINTS_TO_REAL_RATIO);
+    const debit = Math.round(discountValue / POINTS_TO_REAL_RATIO);
+    console.log("[calculatePointsToDebit] from discount", { discountValue, debit });
+    return debit;
   }
 
   const pointsUsedAttribute = order.note_attributes?.find(
     (attr) => attr.name === "pointsToUse" || attr.name === "points_used",
   );
   if (pointsUsedAttribute) {
-    return parseInt(pointsUsedAttribute.value) || 0;
+    const debit = parseInt(pointsUsedAttribute.value) || 0;
+    console.log("[calculatePointsToDebit] from note attribute", { debit });
+    return debit;
   }
   return 0;
 }
@@ -138,7 +159,9 @@ export function calculatePointsToAdd(
 ): number {
   const totalValue = parseFloat(totalPrice);
   const multiplier = POINTS_LEVEL[currentLevel]?.multiplier ?? 1;
-  return Math.floor(totalValue) * multiplier;
+  const toAdd = Math.floor(totalValue) * multiplier;
+  console.log("[calculatePointsToAdd]", { totalValue, currentLevel, multiplier, toAdd });
+  return toAdd;
 }
 
 export async function updateCustomerPoints(
@@ -147,6 +170,7 @@ export async function updateCustomerPoints(
   customerId: string,
   newPoints: number,
 ): Promise<boolean> {
+  console.log("[updateCustomerPoints] start", { customerId, newPoints });
   const mutation = `
     mutation customerUpdate($input: CustomerInput!) {
       customerUpdate(input: $input) {
@@ -178,12 +202,18 @@ export async function updateCustomerPoints(
       body: JSON.stringify({ query: mutation, variables: { input } }),
     });
     const result = (await response.json()) as any;
+    console.log("[updateCustomerPoints] result", {
+      hasErrors: Boolean(result?.errors),
+      userErrorsCount: result?.data?.customerUpdate?.userErrors?.length ?? 0,
+      hasCustomer: Boolean(result?.data?.customerUpdate?.customer),
+    });
     return (
       !result?.errors &&
       result?.data?.customerUpdate?.userErrors?.length === 0 &&
       Boolean(result?.data?.customerUpdate?.customer)
     );
   } catch {
+    console.log("[updateCustomerPoints] exception");
     return false;
   }
 }
@@ -193,6 +223,7 @@ export async function getCurrentClubLevel(
   adminToken: string,
   customerId: string,
 ): Promise<number | null> {
+  console.log("[getCurrentClubLevel] start", { customerId });
   const query = `
     query getCustomerClubLevel($id: ID!) {
       customer(id: $id) {
@@ -214,8 +245,10 @@ export async function getCurrentClubLevel(
     const raw = result.data.customer.metafield?.value;
     if (raw === null || raw === undefined) return 0;
     const parsed = parseInt(raw);
+    console.log("[getCurrentClubLevel] value", { value: Number.isNaN(parsed) ? 0 : parsed });
     return Number.isNaN(parsed) ? 0 : parsed;
   } catch {
+    console.log("[getCurrentClubLevel] exception");
     return null;
   }
 }
@@ -225,6 +258,7 @@ export async function getCustomerTotalSpent(
   adminToken: string,
   customerId: string,
 ): Promise<number | null> {
+  console.log("[getCustomerTotalSpent] start", { customerId });
   const query = `
     query getCustomerTotalSpent($id: ID!) {
       customer(id: $id) { amountSpent { amount currencyCode } }
@@ -242,8 +276,10 @@ export async function getCustomerTotalSpent(
     const result = (await response.json()) as any;
     if (result?.errors || !result?.data?.customer) return null;
     const amount = parseFloat(result.data.customer.amountSpent?.amount || "0");
+    console.log("[getCustomerTotalSpent] value", { amount: Number.isNaN(amount) ? 0 : amount });
     return Number.isNaN(amount) ? 0 : amount;
   } catch {
+    console.log("[getCustomerTotalSpent] exception");
     return null;
   }
 }
@@ -266,6 +302,7 @@ export async function updateCustomerClubLevel(
   customerId: string,
   newLevel: number,
 ): Promise<boolean> {
+  console.log("[updateCustomerClubLevel] start", { customerId, newLevel });
   const mutation = `
     mutation customerUpdate($input: CustomerInput!) {
       customerUpdate(input: $input) {
@@ -297,12 +334,18 @@ export async function updateCustomerClubLevel(
       body: JSON.stringify({ query: mutation, variables: { input } }),
     });
     const result = (await response.json()) as any;
+    console.log("[updateCustomerClubLevel] result", {
+      hasErrors: Boolean(result?.errors),
+      userErrorsCount: result?.data?.customerUpdate?.userErrors?.length ?? 0,
+      hasCustomer: Boolean(result?.data?.customerUpdate?.customer),
+    });
     return (
       !result?.errors &&
       result?.data?.customerUpdate?.userErrors?.length === 0 &&
       Boolean(result?.data?.customerUpdate?.customer)
     );
   } catch {
+    console.log("[updateCustomerClubLevel] exception");
     return false;
   }
 }
@@ -312,26 +355,44 @@ export const config = { runtime: "edge" } as const;
 
 // Read raw request body in both Edge (Request) and Node bridges
 async function readRawBody(req: any): Promise<string> {
+  console.log("[readRawBody] start");
   if (req && typeof req.text === "function") {
+    console.log("[readRawBody] using req.text()");
     return await req.text();
   }
   if (req && req.body) {
     // Web ReadableStream
     if (typeof ReadableStream !== "undefined" && req.body instanceof ReadableStream) {
+      console.log("[readRawBody] using ReadableStream -> Response().text()");
       return await new Response(req.body).text();
     }
     // Already parsed or string
-    if (typeof req.body === "string") return req.body;
-    if (typeof req.body === "object") return JSON.stringify(req.body);
+    if (typeof req.body === "string") {
+      console.log("[readRawBody] using string body");
+      return req.body;
+    }
+    if (typeof req.body === "object") {
+      console.log("[readRawBody] using JSON.stringify(object) body");
+      return JSON.stringify(req.body);
+    }
   }
   if (typeof req.arrayBuffer === "function") {
+    console.log("[readRawBody] using req.arrayBuffer() fallback");
     const ab = await req.arrayBuffer();
     return new TextDecoder().decode(ab);
   }
+  console.log("[readRawBody] unsupported request body");
   throw new Error("Unsupported request body");
 }
 
 export default async function handler(req: Request): Promise<Response> {
+  console.log("[handler] start", {
+    method: req?.method,
+    url: (req as any)?.url,
+    contentType: req.headers.get("content-type"),
+    topic: req.headers.get("x-shopify-topic"),
+    shop: req.headers.get("x-shopify-shop-domain"),
+  });
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ error: "Method not allowed" }), {
       status: 405,
@@ -350,6 +411,11 @@ export default async function handler(req: Request): Promise<Response> {
     | undefined;
 
   if (!adminGraphQL || !adminToken || !webhookSecret) {
+    console.log("[handler] missing env", {
+      hasAdminGraphQL: Boolean(adminGraphQL),
+      hasAdminToken: Boolean(adminToken),
+      hasWebhookSecret: Boolean(webhookSecret),
+    });
     return new Response(
       JSON.stringify({ error: "Server configuration error" }),
       {
@@ -361,8 +427,10 @@ export default async function handler(req: Request): Promise<Response> {
 
   // Read raw body for HMAC validation
   const rawBody = await readRawBody(req as any);
+  console.log("[handler] body read", { length: rawBody?.length ?? 0, preview: (rawBody || "").slice(0, 256) });
   const hmacHeader = req.headers.get("X-Shopify-Hmac-Sha256");
   if (!hmacHeader) {
+    console.log("[handler] missing HMAC header");
     return new Response(JSON.stringify({ error: "Missing HMAC header" }), {
       status: 401,
       headers: { "Content-Type": "application/json" },
@@ -370,6 +438,7 @@ export default async function handler(req: Request): Promise<Response> {
   }
 
   try {
+    console.log("[handler] HMAC validation start");
     const encoder = new TextEncoder();
     const key = await crypto.subtle.importKey(
       "raw",
@@ -386,6 +455,13 @@ export default async function handler(req: Request): Promise<Response> {
     const calculatedHmac = btoa(
       String.fromCharCode(...new Uint8Array(signature)),
     );
+    console.log("[handler] HMAC compared", {
+      headerLength: hmacHeader.length,
+      calculatedLength: calculatedHmac.length,
+      match: calculatedHmac === hmacHeader,
+      header: hmacHeader,
+      calculated: calculatedHmac,
+    });
     if (calculatedHmac !== hmacHeader) {
       return new Response(JSON.stringify({ error: "Invalid HMAC" }), {
         status: 401,
@@ -393,6 +469,7 @@ export default async function handler(req: Request): Promise<Response> {
       });
     }
   } catch {
+    console.log("[handler] HMAC validation failed (exception)");
     return new Response(JSON.stringify({ error: "HMAC validation failed" }), {
       status: 401,
       headers: { "Content-Type": "application/json" },
@@ -403,7 +480,15 @@ export default async function handler(req: Request): Promise<Response> {
   let order: OrderCreatedPayload;
   try {
     order = JSON.parse(rawBody) as OrderCreatedPayload;
+    console.log("[handler] order parsed", {
+      id: order?.id,
+      name: order?.name,
+      email: order?.email,
+      total_price: order?.total_price,
+      hasCustomer: Boolean(order?.customer),
+    });
   } catch {
+    console.log("[handler] invalid JSON body");
     return new Response(JSON.stringify({ error: "Invalid JSON" }), {
       status: 400,
       headers: { "Content-Type": "application/json" },
@@ -426,6 +511,7 @@ export default async function handler(req: Request): Promise<Response> {
     const noteText = "pagamento avaliado pelo sistema de pontos";
     const existingNote = (order.note || "").trim();
     const newNote = existingNote ? `${existingNote} | ${noteText}` : noteText;
+    console.log("[handler] updating order note", { orderGid, noteLength: newNote.length });
     await updateOrderNote(adminGraphQL, adminToken, orderGid, newNote);
   } catch (e) {
     console.warn("[webhook] note update skipped:", (e as any)?.message || e);
@@ -444,6 +530,13 @@ export default async function handler(req: Request): Promise<Response> {
   let finalPoints = currentPoints;
   if (pointsToDebit > 0) finalPoints -= Math.min(pointsToDebit, currentPoints);
   finalPoints += pointsToAdd;
+  console.log("[handler] points summary", {
+    currentPoints,
+    pointsToDebit,
+    currentClubLevel,
+    pointsToAdd,
+    finalPoints,
+  });
 
   const success = await updateCustomerPoints(
     adminGraphQL,
@@ -452,6 +545,7 @@ export default async function handler(req: Request): Promise<Response> {
     finalPoints,
   );
   if (!success) {
+    console.log("[handler] failed to update customer points");
     return new Response(
       JSON.stringify({ error: "Failed to update customer points" }),
       {
@@ -470,6 +564,7 @@ export default async function handler(req: Request): Promise<Response> {
     );
     if (totalSpent !== null) {
       const newClubLevel = determineClubLevel(totalSpent, currentClubLevel);
+      console.log("[handler] club level check", { totalSpent, currentClubLevel, newClubLevel });
       if (newClubLevel !== currentClubLevel) {
         await updateCustomerClubLevel(
           adminGraphQL,
@@ -486,6 +581,14 @@ export default async function handler(req: Request): Promise<Response> {
     );
   }
 
+  console.log("[handler] success", {
+    order: order.name,
+    customer: order.customer.id,
+    pointsDebited: Math.min(pointsToDebit, currentPoints),
+    pointsAdded: pointsToAdd,
+    previousBalance: currentPoints,
+    newBalance: finalPoints,
+  });
   return new Response(
     JSON.stringify({
       success: true,
