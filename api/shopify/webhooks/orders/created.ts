@@ -386,6 +386,7 @@ async function readRawBody(req: any): Promise<string> {
 }
 
 export default async function handler(req: Request): Promise<Response> {
+  console.log("request", req);
   console.log("[handler] start", {
     method: req?.method,
     url: (req as any)?.url,
