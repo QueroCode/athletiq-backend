@@ -9,7 +9,7 @@ import {
   getCustomerTotalSpent,
   determineClubLevel,
   updateCustomerClubLevel,
-} from "../../../../public/lib.ts";
+} from "../../../../lib/shopify.ts";
 
 export const config = { runtime: "edge" } as const;
 
