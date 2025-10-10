@@ -310,6 +310,27 @@ export async function updateCustomerClubLevel(
 
 export const config = { runtime: "edge" } as const;
 
+// Read raw request body in both Edge (Request) and Node bridges
+async function readRawBody(req: any): Promise<string> {
+  if (req && typeof req.text === "function") {
+    return await req.text();
+  }
+  if (req && req.body) {
+    // Web ReadableStream
+    if (typeof ReadableStream !== "undefined" && req.body instanceof ReadableStream) {
+      return await new Response(req.body).text();
+    }
+    // Already parsed or string
+    if (typeof req.body === "string") return req.body;
+    if (typeof req.body === "object") return JSON.stringify(req.body);
+  }
+  if (typeof req.arrayBuffer === "function") {
+    const ab = await req.arrayBuffer();
+    return new TextDecoder().decode(ab);
+  }
+  throw new Error("Unsupported request body");
+}
+
 export default async function handler(req: Request): Promise<Response> {
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ error: "Method not allowed" }), {
@@ -339,7 +360,7 @@ export default async function handler(req: Request): Promise<Response> {
   }
 
   // Read raw body for HMAC validation
-  const rawBody = await req.text();
+  const rawBody = await readRawBody(req as any);
   const hmacHeader = req.headers.get("X-Shopify-Hmac-Sha256");
   if (!hmacHeader) {
     return new Response(JSON.stringify({ error: "Missing HMAC header" }), {
