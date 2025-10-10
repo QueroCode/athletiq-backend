@@ -381,18 +381,86 @@ async function readRawBody(req: any): Promise<string> {
     const ab = await req.arrayBuffer();
     return new TextDecoder().decode(ab);
   }
+  if (req && typeof req.on === "function") {
+    console.log("[readRawBody] using Node stream fallback");
+    return await new Promise<string>((resolve, reject) => {
+      const chunks: any[] = [];
+      req.on("data", (chunk: any) => {
+        chunks.push(chunk);
+      });
+      req.on("end", () => {
+        try {
+          // Prefer Buffer if available (Node). Otherwise, concatenate strings.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const globalAny: any = globalThis as any;
+          if (globalAny.Buffer) {
+            const buf = globalAny.Buffer.concat(
+              chunks.map((c: any) => (globalAny.Buffer.isBuffer(c) ? c : globalAny.Buffer.from(c))),
+            );
+            resolve(buf.toString("utf8"));
+          } else {
+            resolve(chunks.join(""));
+          }
+        } catch (e) {
+          reject(e);
+        }
+      });
+      req.on("error", (err: unknown) => reject(err));
+    });
+  }
   console.log("[readRawBody] unsupported request body");
   throw new Error("Unsupported request body");
 }
 
-export default async function handler(req: Request): Promise<Response> {
-  console.log("request", req);
+function getHeader(req: any, name: string): string | undefined {
+  const lower = name.toLowerCase();
+  const headers = req?.headers;
+  if (headers && typeof headers.get === "function") {
+    return headers.get(name) || headers.get(lower) || undefined;
+  }
+  if (headers && typeof headers === "object") {
+    const value = headers[lower] ?? headers[name];
+    if (Array.isArray(value)) return value[0];
+    return value;
+  }
+  return undefined;
+}
+
+function toBase64(ab: ArrayBuffer): string {
+  try {
+    // Browser/Edge
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (typeof (globalThis as any).btoa === "function") {
+      const binary = String.fromCharCode(...new Uint8Array(ab));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (globalThis as any).btoa(binary);
+    }
+  } catch {
+    // no-op, fallback to Buffer
+  }
+  // Node
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const g: any = globalThis as any;
+  if (g.Buffer) {
+    return g.Buffer.from(new Uint8Array(ab)).toString("base64");
+  }
+  // Last resort (should not happen in our runtimes)
+  let result = "";
+  const bytes = new Uint8Array(ab);
+  for (let i = 0; i < bytes.length; i++) result += String.fromCharCode(bytes[i]);
+  // Simple polyfill for btoa
+  // eslint-disable-next-line no-undef
+  // @ts-ignore
+  return btoa(result);
+}
+
+export default async function handler(req: any): Promise<Response> {
   console.log("[handler] start", {
     method: req?.method,
     url: (req as any)?.url,
-    contentType: req.headers.get("content-type"),
-    topic: req.headers.get("x-shopify-topic"),
-    shop: req.headers.get("x-shopify-shop-domain"),
+    contentType: getHeader(req, "content-type"),
+    topic: getHeader(req, "x-shopify-topic"),
+    shop: getHeader(req, "x-shopify-shop-domain"),
   });
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ error: "Method not allowed" }), {
@@ -429,7 +497,7 @@ export default async function handler(req: Request): Promise<Response> {
   // Read raw body for HMAC validation
   const rawBody = await readRawBody(req as any);
   console.log("[handler] body read", { length: rawBody?.length ?? 0, preview: (rawBody || "").slice(0, 256) });
-  const hmacHeader = req.headers.get("X-Shopify-Hmac-Sha256");
+  const hmacHeader = getHeader(req, "x-shopify-hmac-sha256");
   if (!hmacHeader) {
     console.log("[handler] missing HMAC header");
     return new Response(JSON.stringify({ error: "Missing HMAC header" }), {
@@ -453,9 +521,7 @@ export default async function handler(req: Request): Promise<Response> {
       key,
       encoder.encode(rawBody),
     );
-    const calculatedHmac = btoa(
-      String.fromCharCode(...new Uint8Array(signature)),
-    );
+    const calculatedHmac = toBase64(signature);
     console.log("[handler] HMAC compared", {
       headerLength: hmacHeader.length,
       calculatedLength: calculatedHmac.length,
