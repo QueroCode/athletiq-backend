@@ -9,7 +9,7 @@ import {
   getCustomerTotalSpent,
   determineClubLevel,
   updateCustomerClubLevel,
-} from "../../_lib";
+} from "../../lib";
 
 export const config = { runtime: "edge" } as const;
 

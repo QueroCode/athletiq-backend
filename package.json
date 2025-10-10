@@ -7,7 +7,8 @@
     "dev": "vercel dev",
     "build": "echo 'edge runtime, no build'",
     "start": "vercel dev"
+  },
+  "devDependencies": {
+    "@types/node": "^24.7.1"
   }
 }
-
-
