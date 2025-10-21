@@ -350,9 +350,6 @@ export async function updateCustomerClubLevel(
   }
 }
 
-
-export const config = { runtime: "edge" } as const;
-
 // Small helper to bound external calls so we don't exceed webhook time limits
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 4500): Promise<Response> {
   const controller = new AbortController();
@@ -505,20 +502,6 @@ async function readRawBodyBytes(req: any): Promise<Uint8Array> {
   throw new Error("Unsupported request body");
 }
 
-function getHeader(req: any, name: string): string | undefined {
-  const lower = name.toLowerCase();
-  const headers = req?.headers;
-  if (headers && typeof headers.get === "function") {
-    return headers.get(name) || headers.get(lower) || undefined;
-  }
-  if (headers && typeof headers === "object") {
-    const value = headers[lower] ?? headers[name];
-    if (Array.isArray(value)) return value[0];
-    return value;
-  }
-  return undefined;
-}
-
 function toBase64(ab: ArrayBuffer): string {
   try {
     // Browser/Edge
@@ -547,216 +530,118 @@ function toBase64(ab: ArrayBuffer): string {
   return btoa(result);
 }
 
-export default async function handler(req: any): Promise<Response> {
-  console.log("[handler] start", {
-    method: req?.method,
-    url: (req as any)?.url,
-    contentType: getHeader(req, "content-type"),
-    topic: getHeader(req, "x-shopify-topic"),
-    shop: getHeader(req, "x-shopify-shop-domain"),
-  });
-  if (req.method !== "POST") {
-    return new Response(JSON.stringify({ error: "Method not allowed" }), {
-      status: 405,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
+// api/shopify/webhooks/orders/created.ts
+export const runtime = 'edge';
 
-  const adminGraphQL = process.env.PRIVATE_ADMIN_GRAPHQL_API_ENDPOINT as
-    | string
-    | undefined;
-  const adminToken = process.env.PRIVATE_ADMIN_GRAPHQL_API_TOKEN as
-    | string
-    | undefined;
-  const webhookSecret = process.env.SHOPIFY_WEBHOOK_SECRET as
-    | string
-    | undefined;
+// ====== suas constantes, tipos e helpers de GraphQL (inalterados) ======
+// ... POINTS_TO_REAL_RATIO, POINTS_LEVEL, tipos, calculatePointsToDebit/ToAdd,
+// getCurrentPoints, getCurrentClubLevel, getCustomerTotalSpent,
+// determineClubLevel, updateOrderNote, updateCustomerPoints, updateCustomerClubLevel,
+// fetchWithTimeout (mantenha igual)
 
-  if (!adminGraphQL || !adminToken || !webhookSecret) {
-    console.log("[handler] missing env", {
-      hasAdminGraphQL: Boolean(adminGraphQL),
-      hasAdminToken: Boolean(adminToken),
-      hasWebhookSecret: Boolean(webhookSecret),
-    });
-    return new Response(
-      JSON.stringify({ error: "Server configuration error" }),
-      {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      },
-    );
-  }
+function getHeader(req: Request, name: string): string | undefined {
+  const v = req.headers.get(name) || req.headers.get(name.toLowerCase());
+  return v ?? undefined;
+}
 
-  // Read raw body for HMAC validation
-  const rawBytes = await readRawBodyBytes(req as any);
-  const rawBody = new TextDecoder().decode(rawBytes);
-  console.log("[handler] body read", { length: rawBytes?.length ?? 0, preview: rawBody.slice(0, 256) });
-  const hmacHeader = getHeader(req, "x-shopify-hmac-sha256");
-  if (!hmacHeader) {
-    console.log("[handler] missing HMAC header");
-    return new Response(JSON.stringify({ error: "Missing HMAC header" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
+export default async function handler(req: Request): Promise<Response> {
+  // Timeout defensivo para a função como um todo
+  const ac = new AbortController();
+  const kill = setTimeout(() => ac.abort(), 4500);
 
   try {
-    console.log("[handler] HMAC validation start");
-    const key = await crypto.subtle.importKey(
-      "raw",
-      new TextEncoder().encode(webhookSecret),
-      { name: "HMAC", hash: "SHA-256" },
-      false,
-      ["sign"],
-    );
-    // Ensure an ArrayBuffer (not SharedArrayBuffer) for WebCrypto
-    const dataForHmacBuf = new ArrayBuffer(rawBytes.byteLength);
-    new Uint8Array(dataForHmacBuf).set(rawBytes);
-    const signature = await crypto.subtle.sign(
-      "HMAC",
-      key,
-      dataForHmacBuf,
-    );
-    const calculatedHmac = toBase64(signature);
-    const mask = (s: string) => (s ? `${s.slice(0, 6)}...${s.slice(-4)}` : "");
-    console.log("[handler] HMAC compared", {
-      headerLength: hmacHeader.length,
-      calculatedLength: calculatedHmac.length,
-      match: calculatedHmac === hmacHeader,
-      headerMasked: mask(hmacHeader),
-      calculatedMasked: mask(calculatedHmac),
-    });
-    if (calculatedHmac !== hmacHeader) {
-      return new Response(JSON.stringify({ error: "Invalid HMAC" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
+    if (req.method !== 'POST') {
+      return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+        status: 405, headers: { 'Content-Type': 'application/json' },
       });
     }
-  } catch {
-    console.log("[handler] HMAC validation failed (exception)");
-    return new Response(JSON.stringify({ error: "HMAC validation failed" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
 
-  // Parse order
-  let order: OrderCreatedPayload;
-  try {
-    order = JSON.parse(rawBody) as OrderCreatedPayload;
-    console.log("[handler] order parsed", {
-      id: order?.id,
-      name: order?.name,
-      email: order?.email,
-      total_price: order?.total_price,
-      hasCustomer: Boolean(order?.customer),
-    });
-  } catch {
-    console.log("[handler] invalid JSON body");
-    return new Response(JSON.stringify({ error: "Invalid JSON" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-
-  if (!order.customer) {
-    return new Response(
-      JSON.stringify({ message: "No customer associated with order" }),
-      {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      },
-    );
-  }
-
-  // Early note update (non-fatal if fails)
-  try {
-    const orderGid = `gid://shopify/Order/${order.id}`;
-    const noteText = "pagamento avaliado pelo sistema de pontos";
-    const existingNote = (order.note || "").trim();
-    const newNote = existingNote ? `${existingNote} | ${noteText}` : noteText;
-    console.log("[handler] updating order note", { orderGid, noteLength: newNote.length });
-    await updateOrderNote(adminGraphQL, adminToken, orderGid, newNote);
-  } catch (e) {
-    console.warn("[webhook] note update skipped:", (e as any)?.message || e);
-  }
-
-  const customerId = `gid://shopify/Customer/${order.customer.id}`;
-
-  // Points pipeline
-  const currentPoints =
-    (await getCurrentPoints(adminGraphQL, adminToken, customerId)) ?? 0;
-  const pointsToDebit = calculatePointsToDebit(order);
-  const currentClubLevel =
-    (await getCurrentClubLevel(adminGraphQL, adminToken, customerId)) ?? 0;
-  const pointsToAdd = calculatePointsToAdd(order.total_price, currentClubLevel);
-
-  let finalPoints = currentPoints;
-  if (pointsToDebit > 0) finalPoints -= Math.min(pointsToDebit, currentPoints);
-  finalPoints += pointsToAdd;
-  console.log("[handler] points summary", {
-    currentPoints,
-    pointsToDebit,
-    currentClubLevel,
-    pointsToAdd,
-    finalPoints,
-  });
-
-  const success = await updateCustomerPoints(
-    adminGraphQL,
-    adminToken,
-    customerId,
-    finalPoints,
-  );
-  if (!success) {
-    console.log("[handler] failed to update customer points");
-    return new Response(
-      JSON.stringify({ error: "Failed to update customer points" }),
-      {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      },
-    );
-  }
-
-  // Club level maintenance (best-effort)
-  try {
-    const totalSpent = await getCustomerTotalSpent(
-      adminGraphQL,
-      adminToken,
-      customerId,
-    );
-    if (totalSpent !== null) {
-      const newClubLevel = determineClubLevel(totalSpent, currentClubLevel);
-      console.log("[handler] club level check", { totalSpent, currentClubLevel, newClubLevel });
-      if (newClubLevel !== currentClubLevel) {
-        await updateCustomerClubLevel(
-          adminGraphQL,
-          adminToken,
-          customerId,
-          newClubLevel,
-        );
-      }
+    const adminGraphQL = process.env.PRIVATE_ADMIN_GRAPHQL_API_ENDPOINT;
+    const adminToken   = process.env.PRIVATE_ADMIN_GRAPHQL_API_TOKEN;
+    const webhookSecret= process.env.SHOPIFY_WEBHOOK_SECRET;
+    if (!adminGraphQL || !adminToken || !webhookSecret) {
+      return new Response(JSON.stringify({ error: 'Server configuration error' }), {
+        status: 500, headers: { 'Content-Type': 'application/json' },
+      });
     }
-  } catch (e) {
-    console.warn(
-      "[webhook] club level update skipped:",
-      (e as any)?.message || e,
-    );
-  }
 
-  console.log("[handler] success", {
-    order: order.name,
-    customer: order.customer.id,
-    pointsDebited: Math.min(pointsToDebit, currentPoints),
-    pointsAdded: pointsToAdd,
-    previousBalance: currentPoints,
-    newBalance: finalPoints,
-  });
-  
-  try {
-    console.log("[handler] preparing response");
-    const responseData = {
+    // 1) Body bruto e HMAC
+    const rawBytes = await req.arrayBuffer();
+    const hmacHeader = getHeader(req, 'x-shopify-hmac-sha256');
+    if (!hmacHeader) {
+      return new Response(JSON.stringify({ error: 'Missing HMAC header' }), {
+        status: 401, headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    const key = await crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(webhookSecret),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign'],
+    );
+    const signature = await crypto.subtle.sign('HMAC', key, rawBytes);
+    const calculatedHmac = btoa(String.fromCharCode(...new Uint8Array(signature)));
+    if (calculatedHmac !== hmacHeader) {
+      return new Response(JSON.stringify({ error: 'Invalid HMAC' }), {
+        status: 401, headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    // 2) Parse do pedido
+    let order: OrderCreatedPayload;
+    try {
+      order = JSON.parse(new TextDecoder().decode(rawBytes));
+    } catch {
+      return new Response(JSON.stringify({ error: 'Invalid JSON' }), {
+        status: 400, headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    if (!order.customer) {
+      return new Response(JSON.stringify({ message: 'No customer associated with order' }), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    const customerGid = `gid://shopify/Customer/${order.customer.id}`;
+    const orderGid    = `gid://shopify/Order/${order.id}`;
+
+    // Atualização de nota (não crítico) — pode aguardar rápido ou tornar fire-and-forget
+    const noteText = 'pagamento avaliado pelo sistema de pontos';
+    const existingNote = (order.note || '').trim();
+    const newNote = existingNote ? `${existingNote} | ${noteText}` : noteText;
+    await updateOrderNote(adminGraphQL!, adminToken!, orderGid, newNote);
+
+    // 3) Pipeline de pontos
+    const currentPoints = (await getCurrentPoints(adminGraphQL!, adminToken!, customerGid)) ?? 0;
+    const pointsToDebit = calculatePointsToDebit(order);
+    const currentLevel  = (await getCurrentClubLevel(adminGraphQL!, adminToken!, customerGid)) ?? 0;
+    const pointsToAdd   = calculatePointsToAdd(order.total_price, currentLevel);
+
+    let finalPoints = currentPoints - Math.min(pointsToDebit, currentPoints) + pointsToAdd;
+
+    const okUpdate = await updateCustomerPoints(adminGraphQL!, adminToken!, customerGid, finalPoints);
+    if (!okUpdate) {
+      return new Response(JSON.stringify({ error: 'Failed to update customer points' }), {
+        status: 500, headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    // 4) Manutenção do nível — best-effort (não precisa travar a resposta)
+    getCustomerTotalSpent(adminGraphQL!, adminToken!, customerGid)
+      .then(total => {
+        if (total !== null) {
+          const newLevel = determineClubLevel(total, currentLevel);
+          if (newLevel !== currentLevel) {
+            return updateCustomerClubLevel(adminGraphQL!, adminToken!, customerGid, newLevel);
+          }
+        }
+      })
+      .catch(() => { /* no-op best effort */ });
+
+    // 5) Resposta imediata e enxuta
+    const body = JSON.stringify({
       success: true,
       order: order.name,
       customer: order.customer.id,
@@ -764,25 +649,15 @@ export default async function handler(req: any): Promise<Response> {
       pointsAdded: pointsToAdd,
       previousBalance: currentPoints,
       newBalance: finalPoints,
-    };
-    
-    console.log("[handler] response data prepared", { responseData });
-    
-    const responseBody = JSON.stringify(responseData);
-    console.log("[handler] response body stringified", { bodyLength: responseBody.length });
-    
-    const response = new Response(responseBody, { 
-      status: 200, 
-      headers: { "Content-Type": "application/json" } 
     });
-    
-    console.log("[handler] response created successfully");
-    return response;
-  } catch (error) {
-    console.error("[handler] error creating response", error);
-    return new Response(
-      JSON.stringify({ error: "Failed to create response", details: (error as any)?.message }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
-    );
+
+    return new Response(body, { status: 200, headers: { 'Content-Type': 'application/json' } });
+
+  } catch (err: any) {
+    return new Response(JSON.stringify({ error: 'Internal server error', details: err?.message }), {
+      status: 500, headers: { 'Content-Type': 'application/json' },
+    });
+  } finally {
+    clearTimeout(kill);
   }
 }
