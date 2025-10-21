@@ -753,8 +753,10 @@ export default async function handler(req: any): Promise<Response> {
     previousBalance: currentPoints,
     newBalance: finalPoints,
   });
-  return new Response(
-    JSON.stringify({
+  
+  try {
+    console.log("[handler] preparing response");
+    const responseData = {
       success: true,
       order: order.name,
       customer: order.customer.id,
@@ -762,7 +764,25 @@ export default async function handler(req: any): Promise<Response> {
       pointsAdded: pointsToAdd,
       previousBalance: currentPoints,
       newBalance: finalPoints,
-    }),
-    { status: 200, headers: { "Content-Type": "application/json" } },
-  );
+    };
+    
+    console.log("[handler] response data prepared", { responseData });
+    
+    const responseBody = JSON.stringify(responseData);
+    console.log("[handler] response body stringified", { bodyLength: responseBody.length });
+    
+    const response = new Response(responseBody, { 
+      status: 200, 
+      headers: { "Content-Type": "application/json" } 
+    });
+    
+    console.log("[handler] response created successfully");
+    return response;
+  } catch (error) {
+    console.error("[handler] error creating response", error);
+    return new Response(
+      JSON.stringify({ error: "Failed to create response", details: (error as any)?.message }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    );
+  }
 }
