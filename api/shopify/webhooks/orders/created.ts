@@ -538,12 +538,6 @@ function getHeader(req: Request, name: string): string | undefined {
 
 export default async function handler(req: Request): Promise<Response> {
 
-  return new Response("test succeeded", { status: 200, headers: { 'Content-Type': 'application/json' } });
-
-  // Timeout defensivo para a função como um todo
-  const ac = new AbortController();
-  const kill = setTimeout(() => ac.abort(), 4500);
-
   try {
     if (req.method !== 'POST') {
       return new Response(JSON.stringify({ error: 'Method not allowed' }), {
@@ -652,7 +646,5 @@ export default async function handler(req: Request): Promise<Response> {
     return new Response(JSON.stringify({ error: 'Internal server error', details: err?.message }), {
       status: 500, headers: { 'Content-Type': 'application/json' },
     });
-  } finally {
-    clearTimeout(kill);
   }
 }
