@@ -523,7 +523,7 @@ function toBase64(ab: ArrayBuffer): string {
 }
 
 // api/shopify/webhooks/orders/created.ts
-export const runtime = 'edge';
+export const config = { runtime: 'edge' };
 
 // ====== suas constantes, tipos e helpers de GraphQL (inalterados) ======
 // ... POINTS_TO_REAL_RATIO, POINTS_LEVEL, tipos, calculatePointsToDebit/ToAdd,
